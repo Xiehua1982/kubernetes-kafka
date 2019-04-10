@@ -1,4 +1,4 @@
-apiVersion: apps/v1beta2
+apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: kafka
@@ -10,7 +10,8 @@ spec:
   serviceName: "broker"
   replicas: 3
   updateStrategy:
-    type: OnDelete
+    type: RollingUpdate
+  podManagementPolicy: Parallel
   template:
     metadata:
       labels:
@@ -20,7 +21,7 @@ spec:
       terminationGracePeriodSeconds: 30
       initContainers:
       - name: init-config
-        image: solsson/kafka-initutils@sha256:c98d7fb5e9365eab391a5dcd4230fc6e72caf929c60f29ff091e3b0215124713
+        image: solsson/kafka-initutils@sha256:f6d9850c6c3ad5ecc35e717308fddb47daffbde18eb93e98e031128fe8b899ef
         env:
         - name: NODE_NAME
           valueFrom:
@@ -34,14 +35,20 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
-        command: ['/bin/bash', '/etc/kafka/init.sh']
+        command: ['/bin/bash', '/etc/kafka-configmap/init.sh']
         volumeMounts:
+        - name: configmap
+          mountPath: /etc/kafka-configmap
         - name: config
           mountPath: /etc/kafka
+        - name: extensions
+          mountPath: /opt/kafka/libs/extensions
       containers:
       - name: broker
-        image: solsson/kafka:1.0.0@sha256:17fdf1637426f45c93c65826670542e36b9f3394ede1cb61885c6a4befa8f72d
+        image: solsson/kafka:2.2.0@sha256:cf048d6211b6b48f1783f97cb41add511386e2f0a5f5c62fa0eee9564dcd3e9a
         env:
+        - name: CLASSPATH
+          value: /opt/kafka/libs/extensions/*
         - name: KAFKA_LOG4J_OPTS
           value: -Dlog4j.configuration=file:/etc/kafka/log4j.properties
         - name: JMX_PORT
@@ -56,10 +63,19 @@ spec:
         command:
         - ./bin/kafka-server-start.sh
         - /etc/kafka/server.properties
+        lifecycle:
+          preStop:
+            exec:
+             command: ["sh", "-ce", "kill -s TERM 1; while $(kill -0 1 2>/dev/null); do sleep 1; done"]
         resources:
           requests:
             cpu: 100m
-            memory: 512Mi
+            memory: 100Mi
+          limits:
+            # This limit was intentionally set low as a reminder that
+            # the entire Yolean/kubernetes-kafka is meant to be tweaked
+            # before you run production workloads
+            memory: 600Mi
         readinessProbe:
           tcpSocket:
             port: 9092
@@ -69,10 +85,16 @@ spec:
           mountPath: /etc/kafka
         - name: data
           mountPath: /var/lib/kafka/data
+        - name: extensions
+          mountPath: /opt/kafka/libs/extensions
       volumes:
-      - name: config
+      - name: configmap
         configMap:
           name: broker-config
+      - name: config
+        emptyDir: {}
+      - name: extensions
+        emptyDir: {}
   volumeClaimTemplates:
   - metadata:
       name: data
@@ -81,4 +103,4 @@ spec:
       storageClassName: kafka-broker
       resources:
         requests:
-          storage: 200Gi
+          storage: 10Gi
